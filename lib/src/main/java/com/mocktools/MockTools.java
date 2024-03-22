@@ -7,7 +7,7 @@ import java.util.*;
 
 public class MockTools {
 
-    private static Map<Class, Object> defaultValues = new HashMap<>() {{
+    private static final Map<Class<?>, Object> defaultValues = new HashMap<>() {{
         this.put(int.class, 0);
         this.put(byte.class, 0);
         this.put(char.class, '\u0000');
@@ -29,8 +29,8 @@ public class MockTools {
     public static <T> T populateUntilLevel(Class<T> instanceClass, int untilLevel)
             throws IllegalAccessException, InvocationTargetException, InstantiationException {
         if (untilLevel < 1) {
-            if (instanceClass.isPrimitive() || MockTools.defaultValues.containsKey(instanceClass)) {
-                return (T) MockTools.defaultValues.get(instanceClass);
+            if (instanceClass.isPrimitive() || defaultValues.containsKey(instanceClass)) {
+                return (T) defaultValues.get(instanceClass);
             }
             if (instanceClass.equals(String.class)) {
                 return (T) "String";
@@ -38,42 +38,59 @@ public class MockTools {
             return null;
         }
 
-        Comparator<Constructor<?>> comparator = Comparator.comparingInt(Constructor::getParameterCount);
-        Optional<Constructor<?>> constructor = Arrays.stream(instanceClass.getConstructors()).min(comparator);
+        Constructor<?> constructor = Arrays.stream(instanceClass.getConstructors())
+                .min(Comparator.comparingInt(Constructor::getParameterCount))
+                .orElse(null);
 
-        Constructor<?> instanceConstructor = constructor.orElse(null);
-
-        if (constructor.isEmpty()) {
+        if (constructor == null) {
             throw new RuntimeException("Unable to create an instance of this class");
         }
 
-        Object[] args = Arrays.stream(instanceConstructor.getParameters()).map(p -> {
-            if (p.getType().isPrimitive() || MockTools.defaultValues.containsKey(p.getType())) return MockTools.defaultValues.get(p.getType());
-            if (p.getType().equals(String.class)) return p.getName();
+        Object[] args = generateArgs(constructor, untilLevel);
+
+        T instance = (T) constructor.newInstance(args);
+
+        populateFields(instanceClass, instance, untilLevel);
+
+        return instance;
+    }
+
+    private static <T> Object[] generateArgs(Constructor<T> constructor, int untilLevel) {
+        return Arrays.stream(constructor.getParameters()).map(p -> {
+            if (p.getType().isPrimitive() || defaultValues.containsKey(p.getType())) {
+                return defaultValues.get(p.getType());
+            }
+            if (p.getType().equals(String.class)) {
+                return p.getName();
+            }
             try {
                 return populateUntilLevel(p.getType(), untilLevel - 1);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
         }).toArray();
+    }
 
-        T instance = (T) instanceConstructor.newInstance(args);
+    private static <T> void populateFields(
+            Class<T> instanceClass,
+            T instance,
+            int untilLevel
+    ) throws IllegalAccessException, InvocationTargetException, InstantiationException {
         Field[] fields = instanceClass.getDeclaredFields();
 
         for (Field field : fields) {
             if (field.trySetAccessible() && field.get(instance) == null) {
                 Class fieldClass = field.getType();
-                if (fieldClass.isPrimitive() || MockTools.defaultValues.containsKey(fieldClass)) {
-                    field.set(instance, MockTools.defaultValues.get(fieldClass));
+                if (fieldClass.isPrimitive() || defaultValues.containsKey(fieldClass)) {
+                    field.set(instance, defaultValues.get(fieldClass));
                 } else if (fieldClass.equals(String.class)) {
                     field.set(instance, field.getName());
                 } else {
                     field.set(instance, populateUntilLevel(fieldClass, untilLevel - 1));
                 }
+                field.setAccessible(false);
             }
         }
-
-        return instance;
     }
 
 }
